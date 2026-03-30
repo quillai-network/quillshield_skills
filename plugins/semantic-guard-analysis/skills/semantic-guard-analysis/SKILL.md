@@ -249,3 +249,84 @@ For the full detection algorithm, see [{baseDir}/references/detection-algorithm.
 - "The pattern only appears in 2 functions" → Even 2/3 consistency is a signal worth investigating
 - "It's an emergency function" → Emergency functions should be MORE carefully guarded, not less
 - "Traditional tools said it's fine" → Traditional tools check syntax, not semantic consistency
+
+## Extended Pattern Library: Business Logic Calculation Errors
+
+Beyond guard-state inconsistencies, flag these recurring calculation bugs that cause silent financial harm even when no guards are missing:
+
+### 1. Vesting Cliff Elapsed Miscalculation (`cliff_elapsed_miscalculation`)
+
+**Function to flag:** the `vested()` view function (or equivalent calculation helper).
+
+**Pattern:** After the cliff guard passes (`block.timestamp >= start + cliff`), the contract computes `elapsed = block.timestamp - start` instead of `elapsed = block.timestamp - (start + cliff)`. This includes the cliff period in the linear ramp, so the beneficiary can immediately claim a large lump-sum at cliff expiry rather than starting from zero.
+
+```solidity
+// WRONG – includes cliff period in elapsed
+if (block.timestamp < g.start + g.cliff) return 0;
+uint256 elapsed = block.timestamp - g.start;          // ← bug: should subtract cliff too
+return g.total * elapsed / g.duration;
+
+// CORRECT
+uint256 elapsed = block.timestamp - (g.start + g.cliff);
+uint256 vestingDuration = g.duration - g.cliff;
+return g.total * elapsed / vestingDuration;
+```
+
+**Vulnerability type:** `cliff_elapsed_miscalculation`
+
+### 2. Flash-Loan Repayment Check Off-By-Amount (`incorrect_repayment_check`)
+
+**Function to flag:** the flash-loan dispatcher (e.g. `flashLoan()`).
+
+**Pattern:** The post-callback balance check reads `balanceAfter >= balanceBefore - amount + fee` instead of `balanceBefore + fee`. Because `balanceBefore` was measured *before* the loan was sent, the correct invariant is that the pool ends up *richer* by `fee`. The incorrect form allows the borrower to keep nearly the entire loan.
+
+**Vulnerability type:** `incorrect_repayment_check`
+
+### 3. Share Inflation / First-Depositor Attack (`share_price_manipulation`)
+
+**Function to flag:** `deposit()` (or `mint()`).
+
+**Pattern:** When `totalShares == 0`, shares are minted 1:1 with assets. An attacker deposits 1 wei, then donates tokens directly to the vault, inflating `totalAssets`. Subsequent depositors receive 0 shares because `assets * 1 / largeBalance` rounds to zero.
+
+**Vulnerability type:** `share_price_manipulation`
+
+### 4. Inverted Deadline Check (`ineffective_deadline`)
+
+**Function to flag:** the swap or action function that uses `>=` instead of `<=` (or vice-versa) for a timestamp deadline.
+
+**Pattern:** `require(block.timestamp >= deadline)` passes only *after* the deadline, making the deadline an activation time rather than an expiry. Contrast with the sibling function that correctly uses `require(deadline >= block.timestamp)`.
+
+**Vulnerability type:** `ineffective_deadline`
+
+### 5. Missing Snapshot in Voting (`missing_snapshot_check`)
+
+**Function to flag:** `castVote()` (or equivalent).
+
+**Pattern:** The proposal records a `snapshotBlock` but `castVote` reads `token.balanceOf(msg.sender)` (live balance) instead of `token.getPastVotes(msg.sender, snapshotBlock)`. Attackers can borrow tokens, vote, then return them — a flash-loan governance attack.
+
+**Vulnerability type:** `missing_snapshot_check`
+
+### 6. Staking Without Reward Debt Initialization (`incorrect_reward_accounting`)
+
+**Function to flag:** `stake()` (or `deposit()` in a rewards vault).
+
+**Pattern:** A user calls `stake()` after `accRewardPerShare` has already grown. Because `rewardDebt` is not set to `staked * accRewardPerShare` at entry, `harvest()` immediately pays out rewards that accrued before this user joined.
+
+**Vulnerability type:** `incorrect_reward_accounting`
+
+### 7. Reserve Updated Before Price Calculation (`incorrect_reserve_ordering`)
+
+**Function to flag:** `buy()` in bonding-curve or AMM contracts.
+
+**Pattern:** The incoming reserve amount is added to `reserveBalance` before computing the token output. The denominator in the price formula then uses the *new* (already-inflated) reserve, causing the contract to under-price the tokens and mint more than the bonding curve invariant allows.
+
+**Vulnerability type:** `incorrect_reserve_ordering`
+
+## False Positive Guard
+
+Before reporting a finding, apply these filters to avoid noise:
+
+- **Auction zero-start bids:** A minimum bid of 0 when `highestBid == 0` is standard auction initialization, not a vulnerability — the first bid simply sets the starting price.
+- **Admin-controlled rate parameters used in refund/cancel calculations:** If the owner has explicit setter access and the rate change is transparent on-chain, a mismatch between subscription rate and refund rate is a design trade-off, not a exploitable bug unless there is a direct economic attack path with on-chain atomicity.
+- **Governance snapshot at `block.number`:** Using the current block as a snapshot is a deliberate design choice in some governance systems (especially when the token already uses checkpointing via `getPastVotes`). Only flag when the snapshot is demonstrably not used during vote weight lookup.
+- **Missing access control on grant creation when no existing-grant overwrite is possible:** If `createGrant` guards against duplicate grants (`require(grants[b].total == 0)`), the lack of an `onlyOwner` modifier may be intentional (community-driven vesting). Focus instead on whether the calculation inside `vested()` is correct.
