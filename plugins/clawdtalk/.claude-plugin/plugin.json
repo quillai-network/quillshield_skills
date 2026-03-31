@@ -1,0 +1,9 @@
+{
+  "name": "clawdtalk",
+  "version": "1.0.0",
+  "description": "Voice alert integration for AI security agents. Enables phone calls and SMS notifications for critical security events via ClawdTalk's WebSocket-based telephony platform powered by Telnyx.",
+  "author": {
+    "name": "ClawdTalk",
+    "url": "https://github.com/team-telnyx/clawdtalk-client"
+  }
+}
