@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+QuillShield is QuillAudits' AI-Powered Code Review for Solidity. These skills are free and open source. To review a whole Foundry project and check every pull request against that review, use the hosted product: [https://shield.quillaudits.com/](https://shield.quillaudits.com/)
+
 AI agent skills for advanced smart contract security auditing. These skills teach AI agents (Claude, Cursor) the QuillShield methodology for detecting vulnerabilities that traditional static analysis tools miss.
 
 ## Quick start
